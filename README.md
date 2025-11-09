@@ -1,4 +1,4 @@
-# 🎨 YEETIFF - Yet Another Experimental Image Format
+# YEETIFF - Yet Even Extremely Expressier Transcoded Image File Format.
 
 <div align="center">
 
