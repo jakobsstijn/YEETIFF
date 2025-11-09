@@ -1,0 +1,25 @@
+Windows Registry Editor Version 5.00
+
+; YEET Image File Type Registration
+; Replace C:\\Path\\To\\YeetViewer.exe with the actual path to your YeetViewer.exe
+; To use: Edit the path below, then double-click this file to register
+
+; Register .yeet extension
+[HKEY_CLASSES_ROOT\.yeet]
+@="YeetImageFile"
+
+; Define the file type
+[HKEY_CLASSES_ROOT\YeetImageFile]
+@="YEET Image File"
+
+; Set the default icon (uses the exe icon)
+[HKEY_CLASSES_ROOT\YeetImageFile\DefaultIcon]
+@="C:\\Path\\To\\YeetViewer.exe,0"
+
+; Register the open command
+[HKEY_CLASSES_ROOT\YeetImageFile\shell\open\command]
+@="\"C:\\Path\\To\\YeetViewer.exe\" \"%1\""
+
+; Add a friendly type name
+[HKEY_CLASSES_ROOT\YeetImageFile]
+"FriendlyTypeName"="YEET Image File"
