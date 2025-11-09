@@ -4,10 +4,22 @@ Complete Windows installer for the YEET image format (.yeet files). This creates
 
 ## 🎯 What is .yeet format?
 
-**YEETIFF** (Yet Even Expressier Transcoded Image File Format) is a simple, uncompressed image format:
-- **First 4 bytes**: Width (unsigned 32-bit integer, native byte order)
-- **Next 4 bytes**: Height (unsigned 32-bit integer, native byte order)
-- **Remaining bytes**: Hex color codes (6 characters per pixel: RRGGBB format, newlines are ignored)
+**YEETIFF** (Yet Even Expressier Transcoded Image File Format) is a flexible image format with two versions:
+
+**YEET v2 (Current):**
+- **Header**: Magic bytes "YEET" + version + flags
+- **Alpha channel**: Full RGBA support with transparency
+- **Compression**: Optional zlib compression for smaller files
+- **Binary mode**: Raw bytes or human-readable hex
+- **Metadata**: JSON metadata (author, date, software)
+- **Structure**: Variable size based on options
+
+**YEET v1 (Legacy):**
+- **First 4 bytes**: Width (unsigned 32-bit integer)
+- **Next 4 bytes**: Height (unsigned 32-bit integer)
+- **Remaining**: RGB hex color codes (6 chars per pixel)
+
+The viewer supports both formats automatically!
 
 ## 📦 What does this installer do?
 
