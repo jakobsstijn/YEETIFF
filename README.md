@@ -3,8 +3,6 @@
 
 A playful, uncompressed image format that represents pixels as readable hexadecimal color codes.
 
-![Example](https://cdn.discordapp.com/attachments/1074408238939906220/1130764354661384192/image.png)
-
 ## What is .yeet?
 
 YEET is an experimental image file format created for fun and learning. Unlike traditional compressed formats like PNG or JPEG, YEET stores images in a human-readable text format where each pixel is represented by its hex color code (e.g., `FF0000` for red).
