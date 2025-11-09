@@ -1,26 +1,29 @@
-[package]
-name = "yeet"
-version = "0.1.0"
+[workspace]
+members = [
+    "yeet-core",
+    "yeet-v3",
+    "yeet-legacy",
+]
+
+resolver = "2"
+
+[workspace.package]
+version = "2.0.0"
 edition = "2021"
+authors = ["Stijn Jakobs"]
+license = "MIT"
+repository = "https://github.com/jakobsstijn/YEETIFF"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-base64 = "0.21.2"
-colors-transform = "0.2.11"
-css-color-parser = "0.1.2"
+[workspace.dependencies]
+# Shared dependencies across all members
+image = { version = "0.24", default-features = false, features = ["png"] }
 eframe = "0.22.0"
 egui_extras = { version = "0.22", features = ["image"] }
-encoding = "0.2.33"
-encoding_rs = "0.8.32"
-env_logger = "0.10.0"
-image = { version = "0.24", default-features = false, features = ["png"] }
-rand = "0.8.5"
-show-image = "0.13.1"
-skia-safe = "0.63.0"
-winapi = "0.3"
 flate2 = "1.0"
 
-[[bin]]
-name = "yeet"
-path = "main.rs"
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

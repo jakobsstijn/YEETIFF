@@ -772,19 +772,31 @@ Click Finish to close the installer."""
                 self.log(f"✓ Using bundled viewer from installer")
                 return bundled_exe
         
-        # Priority 2: Rust release build (yeet-format folder) - for development
+        # Priority 2: Workspace release build (new structure) - for development
+        workspace_release = os.path.join(parent_dir, "target", "release", "yeet.exe")
+        if os.path.exists(workspace_release):
+            self.log(f"✓ Found workspace release build")
+            return workspace_release
+        
+        # Priority 3: Component release build (yeet-core) - for development
+        core_release = os.path.join(parent_dir, "yeet-core", "target", "release", "yeet.exe")
+        if os.path.exists(core_release):
+            self.log(f"✓ Found yeet-core release build")
+            return core_release
+        
+        # Priority 4: Legacy release build (yeet-format folder) - backward compatibility
         rust_release = os.path.join(parent_dir, "yeet-format", "target", "release", "yeet.exe")
         if os.path.exists(rust_release):
-            self.log(f"✓ Found Rust release build")
+            self.log(f"✓ Found legacy Rust release build")
             return rust_release
         
-        # Priority 3: Rust debug build (yeet-format folder) - for development
+        # Priority 5: Legacy debug build (yeet-format folder) - backward compatibility
         rust_debug = os.path.join(parent_dir, "yeet-format", "target", "debug", "yeet.exe")
         if os.path.exists(rust_debug):
-            self.log(f"✓ Found Rust debug build")
+            self.log(f"✓ Found legacy Rust debug build")
             return rust_debug
         
-        # Priority 4: Python built executable (current dir)
+        # Priority 6: Python built executable (current dir)
         exe_path = os.path.join(current_dir, "dist", "YeetViewer.exe")
         if os.path.exists(exe_path):
             self.log(f"✓ Found Python viewer build")

@@ -73,6 +73,10 @@ def main():
     # Check if YEET viewer exists
     parent_dir = os.path.dirname(os.path.abspath(__file__))
     viewer_paths = [
+        # New project structure
+        os.path.join(parent_dir, "..", "target", "release", "yeet.exe"),
+        os.path.join(parent_dir, "..", "yeet-core", "target", "release", "yeet.exe"),
+        # Legacy paths (backward compatibility)
         os.path.join(parent_dir, "..", "yeet-format", "target", "release", "yeet.exe"),
         os.path.join(parent_dir, "..", "yeet-format", "target", "debug", "yeet.exe"),
     ]
@@ -87,7 +91,7 @@ def main():
     if not viewer_exe:
         print("[!] WARNING: yeet.exe not found!")
         print("    Build the Rust project first:")
-        print("      cd ../yeet-format")
+        print("      cd yeet-core")
         print("      cargo build --release")
         print("\n    Continuing anyway - installer will search at runtime...\n")
     else:
