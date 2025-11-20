@@ -11,17 +11,18 @@ repository = "https://github.com/jakobsstijn/YEETIFF"
 # Image processing
 image = { version = "0.24", default-features = false, features = ["png"] }
 egui_extras = { version = "0.22", features = ["image"] }
+png = "0.17"  # For ICC profile extraction
 
 # GUI
 eframe = "0.22.0"
 
 # Compression
 flate2 = "1.0"
-# Future: brotli = "3.3"
-# Future: zstd = "0.12"
+brotli = "3.3"
+zstd = "0.12"
 
-# ICC profile support (planned)
-# lcms2 = "6.0"  # Little CMS color management
+# ICC profile support
+lcms2 = "6.0"  # Little CMS color management
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

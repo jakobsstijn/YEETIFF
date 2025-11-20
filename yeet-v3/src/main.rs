@@ -146,6 +146,8 @@ struct YeetImageV3 {
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use flate2::read::ZlibDecoder;
+use brotli::enc::BrotliEncoderParams;
+use std::io::Cursor;
 
 fn compress_data(data: &[u8], algorithm: CompressionAlgorithm) -> Vec<u8> {
     match algorithm {
@@ -156,14 +158,21 @@ fn compress_data(data: &[u8], algorithm: CompressionAlgorithm) -> Vec<u8> {
             encoder.finish().unwrap()
         }
         CompressionAlgorithm::Brotli => {
-            // TODO: Implement Brotli compression
-            eprintln!("[WARN] Brotli not yet implemented, using zlib");
-            compress_data(data, CompressionAlgorithm::Zlib)
+            let mut output = Vec::new();
+            let params = BrotliEncoderParams::default();
+            let mut reader = Cursor::new(data);
+            brotli::BrotliCompress(&mut reader, &mut output, &params).unwrap();
+            println!("[INFO] Brotli compression: {} -> {} bytes ({:.1}% reduction)", 
+                     data.len(), output.len(), 
+                     100.0 * (1.0 - output.len() as f64 / data.len() as f64));
+            output
         }
         CompressionAlgorithm::Zstd => {
-            // TODO: Implement Zstd compression
-            eprintln!("[WARN] Zstd not yet implemented, using zlib");
-            compress_data(data, CompressionAlgorithm::Zlib)
+            let compressed = zstd::encode_all(data, 19).unwrap(); // Level 19 = best compression
+            println!("[INFO] Zstd compression: {} -> {} bytes ({:.1}% reduction)", 
+                     data.len(), compressed.len(), 
+                     100.0 * (1.0 - compressed.len() as f64 / data.len() as f64));
+            compressed
         }
     }
 }
@@ -178,12 +187,13 @@ fn decompress_data(data: &[u8], algorithm: CompressionAlgorithm) -> Vec<u8> {
             decompressed
         }
         CompressionAlgorithm::Brotli => {
-            eprintln!("[WARN] Brotli not yet implemented");
-            decompress_data(data, CompressionAlgorithm::Zlib)
+            let mut output = Vec::new();
+            let mut reader = Cursor::new(data);
+            brotli::BrotliDecompress(&mut reader, &mut output).unwrap();
+            output
         }
         CompressionAlgorithm::Zstd => {
-            eprintln!("[WARN] Zstd not yet implemented");
-            decompress_data(data, CompressionAlgorithm::Zlib)
+            zstd::decode_all(data).unwrap()
         }
     }
 }
@@ -209,18 +219,80 @@ impl From<u8> for CompressionAlgorithm {
 }
 
 // ============================================================================
-// ICC Profile Support (TODO: Implement)
+// ICC Profile Support
 // ============================================================================
 
-fn extract_icc_profile(_path: &PathBuf) -> Option<Vec<u8>> {
-    // TODO: Extract ICC profile from PNG using lcms2 or similar
-    eprintln!("[TODO] ICC profile extraction not yet implemented");
+use lcms2::*;
+
+fn extract_icc_profile(path: &PathBuf) -> Option<Vec<u8>> {
+    // Try to extract ICC profile from PNG
+    if let Ok(file) = std::fs::File::open(path) {
+        let decoder = png::Decoder::new(file);
+        if let Ok(reader) = decoder.read_info() {
+            if let Some(icc_profile) = reader.info().icc_profile.clone() {
+                println!("[INFO] Extracted ICC profile: {} bytes", icc_profile.len());
+                return Some(icc_profile.to_vec());
+            }
+        }
+    }
     None
 }
 
-fn apply_icc_profile(_data: &mut [u8], _profile: &[u8]) {
-    // TODO: Apply ICC color correction
-    eprintln!("[TODO] ICC profile application not yet implemented");
+fn apply_icc_profile(data: &mut Vec<u8>, profile_data: &[u8], width: u32, height: u32, has_alpha: bool) {
+    // Create ICC profile from data
+    let profile = match Profile::new_icc(profile_data) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[WARN] Failed to load ICC profile: {:?}", e);
+            return;
+        }
+    };
+    
+    // Get sRGB profile for display
+    let srgb_profile = Profile::new_srgb();
+    
+    // Create transform
+    let pixel_format = if has_alpha { 
+        PixelFormat::RGBA_8 
+    } else { 
+        PixelFormat::RGB_8 
+    };
+    
+    let transform = match Transform::new(
+        &profile,
+        pixel_format,
+        &srgb_profile,
+        pixel_format,
+        Intent::Perceptual,
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("[WARN] Failed to create color transform: {:?}", e);
+            return;
+        }
+    };
+    
+    // Apply transform to image data
+    let pixels = (width * height) as usize;
+    let bytes_per_pixel = if has_alpha { 4 } else { 3 };
+    
+    if data.len() != pixels * bytes_per_pixel {
+        eprintln!("[WARN] Data size mismatch for ICC transform");
+        return;
+    }
+    
+    // Process in chunks for better performance
+    let chunk_size = 1024; // Process 1024 pixels at a time
+    for chunk_start in (0..pixels).step_by(chunk_size) {
+        let chunk_end = (chunk_start + chunk_size).min(pixels);
+        let byte_start = chunk_start * bytes_per_pixel;
+        let byte_end = chunk_end * bytes_per_pixel;
+        
+        let chunk = &mut data[byte_start..byte_end];
+        transform.transform_pixels(chunk, chunk);
+    }
+    
+    println!("[INFO] Applied ICC color correction");
 }
 
 // ============================================================================
@@ -335,6 +407,313 @@ fn png_to_yeet_v3(
 }
 
 // ============================================================================
+// v3 Reading & Viewing
+// ============================================================================
+
+fn read_yeet_v3(path: PathBuf) -> Result<YeetImageV3, std::io::Error> {
+    let mut file = File::open(&path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    
+    let mut pos = 0;
+    
+    // Verify magic bytes
+    if &buffer[pos..pos+4] != b"YEET" {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid YEET file: wrong magic bytes"
+        ));
+    }
+    pos += 4;
+    
+    // Read version
+    let version = buffer[pos];
+    pos += 1;
+    if version != 3 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Expected v3, got v{}", version)
+        ));
+    }
+    
+    // Read flags
+    let flags = buffer[pos];
+    pos += 1;
+    
+    let compression = CompressionAlgorithm::from(flags & 0b00000011);
+    let has_alpha = (flags & 0b00000100) != 0;
+    let is_binary = (flags & 0b00001000) != 0;
+    let is_animated = (flags & 0b00010000) != 0;
+    let has_icc = (flags & 0b00100000) != 0;
+    let is_hdr = (flags & 0b01000000) != 0;
+    
+    // Read dimensions
+    let width = u32::from_le_bytes([buffer[pos], buffer[pos+1], buffer[pos+2], buffer[pos+3]]);
+    pos += 4;
+    let height = u32::from_le_bytes([buffer[pos], buffer[pos+1], buffer[pos+2], buffer[pos+3]]);
+    pos += 4;
+    
+    // Read frame count
+    let frame_count = u32::from_le_bytes([buffer[pos], buffer[pos+1], buffer[pos+2], buffer[pos+3]]);
+    pos += 4;
+    
+    // Read loop count
+    let loop_count = u32::from_le_bytes([buffer[pos], buffer[pos+1], buffer[pos+2], buffer[pos+3]]);
+    pos += 4;
+    
+    // Read metadata
+    let metadata_len = u32::from_le_bytes([buffer[pos], buffer[pos+1], buffer[pos+2], buffer[pos+3]]) as usize;
+    pos += 4;
+    
+    let metadata_str = String::from_utf8_lossy(&buffer[pos..pos+metadata_len]);
+    let metadata: YeetMetadataV3 = serde_json::from_str(&metadata_str)
+        .unwrap_or_else(|_| YeetMetadataV3::default());
+    pos += metadata_len;
+    
+    // Read ICC profile if present
+    let icc_profile = if has_icc {
+        let icc_len = u32::from_le_bytes([buffer[pos], buffer[pos+1], buffer[pos+2], buffer[pos+3]]) as usize;
+        pos += 4;
+        let profile = buffer[pos..pos+icc_len].to_vec();
+        pos += icc_len;
+        Some(profile)
+    } else {
+        let icc_len = u32::from_le_bytes([buffer[pos], buffer[pos+1], buffer[pos+2], buffer[pos+3]]) as usize;
+        pos += 4;
+        if icc_len > 0 {
+            eprintln!("[WARN] ICC data present but flag not set");
+        }
+        None
+    };
+    
+    // Read frames
+    let mut frames = Vec::new();
+    for _ in 0..frame_count {
+        // Frame delay
+        let delay = u32::from_le_bytes([buffer[pos], buffer[pos+1], buffer[pos+2], buffer[pos+3]]);
+        pos += 4;
+        
+        // Frame data length
+        let data_len = u32::from_le_bytes([buffer[pos], buffer[pos+1], buffer[pos+2], buffer[pos+3]]) as usize;
+        pos += 4;
+        
+        // Frame data
+        let compressed_data = &buffer[pos..pos+data_len];
+        let data = decompress_data(compressed_data, compression);
+        pos += data_len;
+        
+        frames.push(YeetFrame { delay, data });
+    }
+    
+    println!("[INFO] Loaded YEET v3: {}x{}, {} frames", width, height, frame_count);
+    if has_icc {
+        println!("[INFO] ICC profile present");
+    }
+    
+    Ok(YeetImageV3 {
+        width,
+        height,
+        has_alpha,
+        is_hdr,
+        metadata,
+        icc_profile,
+        frames,
+    })
+}
+
+fn yeet_v3_to_image(yeet_img: &YeetImageV3, frame_index: usize) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
+    let frame = &yeet_img.frames[frame_index];
+    let mut data = frame.data.clone();
+    
+    // Apply ICC profile if present
+    if let Some(ref profile) = yeet_img.icc_profile {
+        apply_icc_profile(&mut data, profile, yeet_img.width, yeet_img.height, yeet_img.has_alpha);
+    }
+    
+    let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = 
+        ImageBuffer::new(yeet_img.width, yeet_img.height);
+    
+    let bytes_per_pixel = if yeet_img.has_alpha { 4 } else { 3 };
+    
+    for y in 0..yeet_img.height {
+        for x in 0..yeet_img.width {
+            let idx = ((y * yeet_img.width + x) * bytes_per_pixel) as usize;
+            
+            let r = data[idx];
+            let g = data[idx + 1];
+            let b = data[idx + 2];
+            let a = if yeet_img.has_alpha { data[idx + 3] } else { 255 };
+            
+            img.put_pixel(x, y, Rgba([r, g, b, a]));
+        }
+    }
+    
+    img
+}
+
+// ============================================================================
+// GUI Application with Animation Support
+// ============================================================================
+
+struct YeetV3ViewerApp {
+    image: Option<YeetImageV3>,
+    current_frame: usize,
+    last_frame_time: std::time::Instant,
+    playing: bool,
+    loaded_image: Option<RetainedImage>,
+}
+
+impl YeetV3ViewerApp {
+    fn new(image: YeetImageV3) -> Self {
+        let is_animated = image.frames.len() > 1;
+        Self {
+            image: Some(image),
+            current_frame: 0,
+            last_frame_time: std::time::Instant::now(),
+            playing: is_animated,
+            loaded_image: None,
+        }
+    }
+    
+    fn update_current_frame(&mut self) {
+        if let Some(ref img) = self.image {
+            let frame_img = yeet_v3_to_image(img, self.current_frame);
+            
+            // Save to temp file for RetainedImage
+            frame_img.save(TEMP_RESULT_PATH).ok();
+            
+            if let Ok(retained) = RetainedImage::from_image_bytes(
+                "temp_frame",
+                &std::fs::read(TEMP_RESULT_PATH).unwrap()
+            ) {
+                self.loaded_image = Some(retained);
+            }
+        }
+    }
+}
+
+impl eframe::App for YeetV3ViewerApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Handle animation
+        if let Some(ref img) = self.image {
+            if self.playing && img.frames.len() > 1 {
+                let current_delay = img.frames[self.current_frame].delay;
+                let delay_ms = if current_delay > 0 { current_delay } else { 100 }; // Default 100ms
+                
+                if self.last_frame_time.elapsed().as_millis() >= delay_ms as u128 {
+                    self.current_frame = (self.current_frame + 1) % img.frames.len();
+                    self.update_current_frame();
+                    self.last_frame_time = std::time::Instant::now();
+                }
+                
+                // Request repaint for smooth animation
+                ctx.request_repaint();
+            }
+        }
+        
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(ref img) = self.image {
+                // Info panel
+                ui.horizontal(|ui| {
+                    ui.heading("YEET v3 Viewer");
+                    ui.separator();
+                    ui.label(format!("{}x{}", img.width, img.height));
+                    
+                    if img.frames.len() > 1 {
+                        ui.separator();
+                        ui.label(format!("Frame {}/{}", self.current_frame + 1, img.frames.len()));
+                        
+                        if ui.button(if self.playing { "⏸ Pause" } else { "▶ Play" }).clicked() {
+                            self.playing = !self.playing;
+                        }
+                        
+                        if ui.button("⏮ Prev").clicked() {
+                            self.current_frame = if self.current_frame == 0 {
+                                img.frames.len() - 1
+                            } else {
+                                self.current_frame - 1
+                            };
+                            self.update_current_frame();
+                        }
+                        
+                        if ui.button("⏭ Next").clicked() {
+                            self.current_frame = (self.current_frame + 1) % img.frames.len();
+                            self.update_current_frame();
+                        }
+                    }
+                    
+                    if img.icc_profile.is_some() {
+                        ui.separator();
+                        ui.label("🎨 ICC Profile");
+                    }
+                });
+                
+                ui.separator();
+                
+                // Metadata panel (collapsible)
+                ui.collapsing("📊 Metadata", |ui| {
+                    egui::Grid::new("metadata_grid")
+                        .num_columns(2)
+                        .spacing([10.0, 5.0])
+                        .show(ui, |ui| {
+                            if let Some(ref author) = img.metadata.author {
+                                ui.label("Author:");
+                                ui.label(author);
+                                ui.end_row();
+                            }
+                            if let Some(ref created) = img.metadata.created {
+                                ui.label("Created:");
+                                ui.label(created);
+                                ui.end_row();
+                            }
+                            ui.label("Software:");
+                            ui.label(&img.metadata.software);
+                            ui.end_row();
+                            
+                            if let Some(ref color_space) = img.metadata.color_space {
+                                ui.label("Color Space:");
+                                ui.label(color_space);
+                                ui.end_row();
+                            }
+                            
+                            ui.label("Bit Depth:");
+                            ui.label(format!("{}-bit", img.metadata.bit_depth));
+                            ui.end_row();
+                            
+                            if img.frames.len() > 1 {
+                                ui.label("Total Frames:");
+                                ui.label(format!("{}", img.frames.len()));
+                                ui.end_row();
+                                
+                                if let Some(delay) = img.metadata.frame_delay {
+                                    ui.label("Frame Delay:");
+                                    ui.label(format!("{}ms", delay));
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                });
+                
+                ui.separator();
+                
+                // Image display
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if self.loaded_image.is_none() {
+                            self.update_current_frame();
+                        }
+                        
+                        if let Some(ref retained_img) = self.loaded_image {
+                            retained_img.show(ui);
+                        }
+                    });
+            }
+        });
+    }
+}
+
+// ============================================================================
 // Main Entry Point
 // ============================================================================
 
@@ -348,7 +727,10 @@ fn main() -> Result<(), eframe::Error> {
         std::process::exit(1);
     }
     
-    println!("[WARN] YEET v3 is experimental. Use yeet-core for production.");
+    println!("[INFO] YEET v3 - Advanced Features Enabled");
+    println!("  ✅ Brotli/Zstd compression");
+    println!("  ✅ ICC color profiles");
+    println!("  ✅ Multi-frame animation");
     println!();
     
     let command = &args[1];
@@ -379,31 +761,78 @@ fn main() -> Result<(), eframe::Error> {
             }
             Ok(())
         }
+        "help" | "--help" | "-h" => {
+            print_usage(&args[0]);
+            Ok(())
+        }
         _ => {
-            eprintln!("[ERROR] Viewing v3 files not yet implemented");
-            eprintln!("Use yeet-core to view v2 files");
-            std::process::exit(1);
+            // Try to view the file
+            let path: PathBuf = args[1].clone().into();
+            
+            match read_yeet_v3(path.clone()) {
+                Ok(img) => {
+                    let options = eframe::NativeOptions {
+                        viewport: egui::ViewportBuilder::default()
+                            .with_inner_size([1024.0, 768.0])
+                            .with_title(format!("YEET v3 Viewer - {}", 
+                                path.file_name().unwrap_or_default().to_string_lossy())),
+                        ..Default::default()
+                    };
+                    
+                    eframe::run_native(
+                        "YEET v3 Viewer",
+                        options,
+                        Box::new(|_cc| Box::new(YeetV3ViewerApp::new(img))),
+                    )
+                }
+                Err(e) => {
+                    eprintln!("[ERROR] Failed to load file: {}", e);
+                    eprintln!("Tip: Use 'compile' command to convert PNG to YEET v3");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
 
 fn print_usage(program: &str) {
-    println!("YEET v3 - Experimental Format");
+    println!("╔═══════════════════════════════════════════════════════════╗");
+    println!("║          YEET v3 - Next Generation Image Format          ║");
+    println!("╚═══════════════════════════════════════════════════════════╝");
     println!();
     println!("USAGE:");
-    println!("  {} compile <file.png> [options]", program);
+    println!("  {} <file.yeet>                    View YEET v3 file", program);
+    println!("  {} compile <file.png> [options]  Convert PNG to YEET v3", program);
     println!();
-    println!("OPTIONS:");
-    println!("  --compress    Use zlib compression");
-    println!("  --brotli      Use Brotli compression (TODO)");
-    println!("  --zstd        Use Zstd compression (TODO)");
-    println!("  --binary      Binary encoding");
+    println!("COMPRESSION OPTIONS:");
+    println!("  --compress    Use zlib compression (v2 compatible)");
+    println!("  --brotli      Use Brotli compression ✨ NEW!");
+    println!("  --zstd        Use Zstd compression ✨ NEW!");
+    println!("  --binary      Binary encoding (recommended)");
     println!();
-    println!("EXPERIMENTAL FEATURES:");
-    println!("  - ICC color profiles (TODO)");
-    println!("  - Multi-frame animation (TODO)");
-    println!("  - HDR support (TODO)");
-    println!("  - Enhanced compression (TODO)");
+    println!("FEATURES:");
+    println!("  ✅ ICC color profiles       Accurate color reproduction");
+    println!("  ✅ Multi-frame animation    GIF/APNG alternative");
+    println!("  ✅ Brotli/Zstd compression  Better than zlib");
+    println!("  ✅ Rich metadata            Extended EXIF-like data");
+    println!("  🚧 HDR support              16-bit per channel (planned)");
     println!();
-    println!("For production use, see yeet-core (v2)");
+    println!("EXAMPLES:");
+    println!("  # Convert with Brotli (best compression)");
+    println!("  {} compile photo.png --brotli --binary", program);
+    println!();
+    println!("  # Convert with Zstd (fast)");
+    println!("  {} compile photo.png --zstd --binary", program);
+    println!();
+    println!("  # View YEET v3 file with animation");
+    println!("  {} animation.yeet", program);
+    println!();
+    println!("VIEWER CONTROLS:");
+    println!("  - Automatic animation playback");
+    println!("  - Play/Pause button");
+    println!("  - Frame navigation (Prev/Next)");
+    println!("  - ICC color correction applied");
+    println!("  - Metadata viewer");
+    println!();
+    println!("For stable/production use, see yeet-core (v2)");
 }
